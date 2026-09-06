@@ -1,11 +1,82 @@
-use clap::{Args, Parser, Subcommand};
+use std::{env::args, rc::Rc};
 
-use crate::plugins::{Config, Plugin, default_plugins};
+use clap::{ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use log::{LevelFilter, info};
 
-pub fn parse(plugins: &Vec<Box<dyn Plugin>>) -> Action {
+use crate::plugins::{Config, Plugin, load_plugins};
+
+pub fn parse() -> Action {
+    let config = get_config_from_args();
+    env_logger::builder()
+        .filter(
+            Option::None,
+            if config.verbosity {
+                LevelFilter::Info
+            } else {
+                LevelFilter::Warn
+            },
+        )
+        .init();
+    let plugins = load_plugins(&config);
+    info!(
+        "Plugins available: \n{:?}",
+        &plugins
+            .iter()
+            .map(|plugin| plugin.display_name())
+            .collect::<String>()
+    );
+    let mut cli = Cli::command();
+    for plugin in plugins.iter() {
+        cli = cli.subcommand(plugin.command());
+    }
+    let cli_args = cli.get_matches();
+
+    if let Some((subcmd, arg_matches)) = cli_args.subcommand() {
+        if let Some(plugin) = plugins.iter().find(|p| p.command_name() == subcmd) {
+            // Find if the sub-cmd if it is from from a plugin
+            return Action::new(
+                ActionType::Plugin(plugin.clone(), Box::new(arg_matches.clone())),
+                plugins,
+                &config,
+            );
+        } else {
+            // The sub-cmd should be one-of well's supported subcommand
+            let parsed_cli = Cli::parse();
+            let action_type = get_action_type_from_native_sub_commands(&parsed_cli, &plugins);
+            return Action {
+                action_type,
+                plugins,
+                config,
+            };
+        }
+    }
+    // No sub-cmd specified, opening list plugins menu
+    Action {
+        action_type: ActionType::ListPlugins,
+        plugins,
+        config,
+    }
+}
+
+fn get_action_type_from_native_sub_commands(
+    parsed_cli: &Cli,
+    plugins: &Vec<Rc<dyn Plugin>>,
+) -> ActionType {
     // TODO
-    Cli::parse();
-    Action::new()
+    ActionType::ListPlugins
+}
+
+fn get_config_from_args() -> Config {
+    let args = args().collect::<Vec<String>>();
+    let matches = Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from_mut(&args)
+        .unwrap_or_else(|e| e.exit());
+    let cli_args = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    Config {
+        verbosity: cli_args.verbose,
+        cli_only: cli_args.cli_only,
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -37,14 +108,16 @@ enum Commands {
 
     // Plugin Management Commands
     ListPlugins,
-    InstallPlugins(InstallPluginArgs),
-    UninstallPlugins(UninstallPluginArgs),
+    InstallPlugin(InstallPluginArgs),
+    UninstallPlugin(UninstallPluginArgs),
 }
 
 #[derive(Args, Debug)]
 struct StartArgs {
+    /// Ordered list of plugins to be executed in each run.
+    /// Input should be of form: "plugin1 arg1 arg2 arg3;plugin2 arg1;plugin 3;plugin 4 arg1"
     #[arg(index = 1)]
-    plugin: Option<String>,
+    ordered_plugins: String,
 }
 
 #[derive(Args, Debug)]
@@ -53,32 +126,32 @@ struct InstallPluginArgs {}
 #[derive(Args, Debug)]
 struct UninstallPluginArgs {}
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Action {
     /// List of actions to perform, the actions are performed in-order.
-    actions: Vec<SubActions>,
+    pub action_type: ActionType,
+    pub plugins: Vec<Rc<dyn Plugin>>,
+    pub config: Config,
 }
 
 impl Action {
-    pub fn new() -> Action {
-        let action = Action {
-            actions: vec![SubActions::Plugin(Box::new(default_plugins::EXPLORER))],
-        };
-        action.configure_actions(&Config::default());
-        action
-    }
-
-    pub fn configure_actions(&self, config: &Config) {
-        self.actions.iter().for_each(|action| {
-            if let SubActions::Plugin(plugin) = action {
-                plugin.configure(config);
-            }
-        });
+    pub fn new(action_type: ActionType, plugins: Vec<Rc<dyn Plugin>>, config: &Config) -> Action {
+        //TODO: Create subactions based on the ordered list of plugins received
+        Action {
+            action_type: action_type,
+            plugins: plugins,
+            config: *config,
+        }
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
-enum SubActions {
-    Plugin(Box<dyn Plugin>),
+pub enum ActionType {
+    Start(Vec<Rc<dyn Plugin>>),
+    Plugin(Rc<dyn Plugin>, Box<ArgMatches>),
     ListPlugins,
+    InstallPlugin,
+    UninstallPlugin,
 }

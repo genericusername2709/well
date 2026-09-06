@@ -1,25 +1,58 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, rc::Rc};
+
+use clap::{ArgMatches, Command};
+use log::info;
 
 mod explorer;
 
-pub fn load_plugins() -> Vec<Box<dyn Plugin>> {
-    // TODO
-    Vec::new()
+pub fn load_plugins(config: &Config) -> Vec<Rc<dyn Plugin>> {
+    info!("Loading Plugins ...");
+    let plugins = fetch_plugins();
+    plugins
+        .into_iter()
+        .filter(|plugin| {
+            plugin.configure(config);
+            plugin.get_availibility()
+        })
+        .collect()
 }
 
-// TODO
+fn fetch_plugins() -> Vec<Rc<dyn Plugin>> {
+    let default_plugins: Vec<Rc<dyn Plugin>> = vec![Rc::new(default_plugins::EXPLORER)];
+    let mut plugins: Vec<Rc<dyn Plugin>> = Vec::new();
+    // TODO: Fetch plugins from config files
+    plugins.extend(default_plugins);
+    plugins
+}
+
 pub trait Plugin: Debug {
-    fn configure(&self, config: &Config);
+    fn command_name(&self) -> String;
+
+    fn command(&self) -> Command;
+
+    fn execute(&self, _: &ArgMatches) {}
+
+    fn execute_tui_ctx(&self, _: &ArgMatches) {}
+
+    fn display_name(&self) -> String {
+        String::from("Undefined Plugin Name")
+    }
+
+    fn configure(&self, _: &Config) {}
+
+    fn get_availibility(&self) -> bool {
+        false
+    }
 }
 
 pub mod default_plugins {
-    use crate::plugins::explorer;
+    use crate::plugins::explorer::Explorer;
 
-    pub const EXPLORER: explorer::Explorer = explorer::Explorer {};
+    pub const EXPLORER: Explorer = Explorer::new();
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Config {
-    verbosity: bool,
-    cli_only: bool,
+    pub verbosity: bool,
+    pub cli_only: bool,
 }
